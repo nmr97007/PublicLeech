@@ -15,11 +15,13 @@ import aria2p
 import asyncio
 import os
 from tobrot.helper_funcs.upload_to_tg import upload_to_tg
+from tobrot.helper_funcs.create_compressed_archive import create_archive
 
 from tobrot import (
     ARIA_TWO_STARTED_PORT,
     MAX_TIME_TO_WAIT_FOR_TORRENTS_TO_START,
     AUTH_CHANNEL,
+    DOWNLOAD_LOCATION,
     EDIT_SLEEP_TIME_OUT
 )
 
@@ -30,7 +32,7 @@ async def aria_start():
     aria2_daemon_start_cmd.append("aria2c")
     # aria2_daemon_start_cmd.append("--allow-overwrite=true")
     aria2_daemon_start_cmd.append("--daemon=true")
-    # aria2_daemon_start_cmd.append(f"--dir={Config.TMP_DOWNLOAD_DIRECTORY}")
+    # aria2_daemon_start_cmd.append(f"--dir={DOWNLOAD_LOCATION}")
     # TODO: this does not work, need to investigate this.
     # but for now, https://t.me/TrollVoiceBot?start=858
     aria2_daemon_start_cmd.append("--enable-rpc")
@@ -105,7 +107,8 @@ async def call_apropriate_function(
     aria_instance,
     incoming_link,
     c_file_name,
-    sent_message_to_update_tg_p
+    sent_message_to_update_tg_p,
+    is_zip
 ):
     if incoming_link.startswith("magnet:"):
         sagtus, err_message = add_magnet(aria_instance, incoming_link, c_file_name)
@@ -137,12 +140,22 @@ async def call_apropriate_function(
             return False, "can't get metadata \n\n#stopped"
     await asyncio.sleep(1)
     file = aria_instance.get_download(err_message)
+    to_upload_file = file.name
+    #
+    if is_zip:
+        # first check if current free space allows this
+        # ref: https://github.com/out386/aria-telegram-mirror-bot/blob/master/src/download_tools/aria-tools.ts#L194
+        # archive the contents
+        check_if_file = await create_archive(to_upload_file)
+        if check_if_file is not None:
+            to_upload_file = check_if_file
+    #
     response = {}
     LOGGER.info(response)
     user_id = sent_message_to_update_tg_p.reply_to_message.from_user.id
     final_response = await upload_to_tg(
         sent_message_to_update_tg_p,
-        file.name,
+        to_upload_file,
         user_id,
         response
     )
@@ -180,7 +193,17 @@ async def check_progress_for_dl(aria2, gid, event, previous_message):
         complete = file.is_complete
         if not complete:
             if not file.error_message:
-                msg = f"\nDownloading File: `{file.name}`"
+                msg = ""
+                # sometimes, this weird https://t.me/c/1220993104/392975
+                # error creeps up
+                # TODO: temporary workaround
+                downloading_dir_name = "N/A"
+                try:
+                    downloading_dir_name = str(download.name)
+                except:
+                    pass
+                #
+                msg = f"\nDownloading File: `{downloading_dir_name}`"
                 msg += f"\nSpeed: {file.download_speed_string()} 🔽 / {file.upload_speed_string()} 🔼"
                 msg += f"\nProgress: {file.progress_string()}"
                 msg += f"\nTotal Size: {file.total_length_string()}"
